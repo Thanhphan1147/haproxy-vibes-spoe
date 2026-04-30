@@ -1,4 +1,4 @@
-name: qwen-local-api
+name: haproxy-spoe-vibes
 base: core22
 version: '1.0'
 summary: Local LLM REST API using llama-server and Qwen 0.5B
@@ -9,35 +9,40 @@ description: |
 confinement: strict
 
 apps:
-  server:
-    # Launches the API and binds it to all network interfaces on port 8080
-    command: bin/llama-server -m $SNAP/models/qwen2.5-0.5b-instruct-q4_k_m.gguf --host 0.0.0.0 --port 8080
+  llama-server:
+    command: bin/start-llama-server
+    daemon: simple
+    plugs: 
+      - network
+      - network-bind
+  spoe-agent:
+    command: bin/start-haproxy-spoe-vibes
     daemon: simple
     plugs: 
       - network
       - network-bind
 
 parts:
-  qwen-0.5:
+  llama.cpp:
+    source: https://github.com/ggml-org/llama.cpp
+    source-type: git
+    plugin: cmake
+    stage-packages:
+      - libgomp1
+  llama-model:
     plugin: nil
-    build-packages:
-      - curl
-      - unzip
+    source: models
     override-build: |
-      # 1. Create the destination directories inside the snap
-      mkdir -p $CRAFT_PART_INSTALL/bin
       mkdir -p $CRAFT_PART_INSTALL/models
-
-      # 2. Fetch and extract the llama-server 
-      # (Note: Using a specific release tag like 'b4900' ensures the build doesn't break if URLs change)
-      curl -LO https://github.com/ggerganov/llama.cpp/releases/download/b4900/llama-b4900-bin-ubuntu-x64.zip
-      unzip llama-b4900-bin-ubuntu-x64.zip llama-server -d $CRAFT_PART_INSTALL/bin/
-      chmod +x $CRAFT_PART_INSTALL/bin/llama-server
-
-      # 3. Fetch the Qwen model directly into the snap's model directory
-      curl -L https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf -o $CRAFT_PART_INSTALL/models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+      cp qwen.gguf $CRAFT_PART_INSTALL/models/model.gguf
   spoe-agent:
     plugin: go
     source: .
     build-snaps:
       - go/1.22/stable
+  scripts:
+    plugin: dump
+    source: ./scripts
+    override-prime: |
+      craftctl default
+      chmod -R +rx $CRAFT_PRIME/bin

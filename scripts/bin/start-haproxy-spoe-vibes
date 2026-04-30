@@ -1,0 +1,14 @@
+#!/bin/sh
+
+# Copyright 2026 Canonical Ltd.
+# See LICENSE file for licensing details.
+
+set -xe
+
+PORT=$(snapctl get server.port)
+
+if [ -z "$PORT" ]; then
+  PORT=25159
+fi
+
+exec $SNAP/bin/vibes $PORT
