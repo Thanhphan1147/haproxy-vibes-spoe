@@ -11,6 +11,7 @@ PORT=$(snapctl get server.port)
 if [ -z "$PORT" ]; then
   PORT=11434
 fi
-
-exec $SNAP/usr/local/bin/llama-server -m $SNAP/models/model.gguf --host 127.0.0.1 --port $PORT
+exec $SNAP/usr/local/bin/llama-server -m $SNAP/models/model.gguf --host 127.0.0.1 --port $PORT \
+  --temp 0.7 --top-k 20 --top-p 0.8 --min-p 0 --presence-penalty 1.5 \
+  --no-context-shift
   --capture-output --log-level="$LOG_LEVEL"

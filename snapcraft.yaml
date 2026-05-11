@@ -1,6 +1,6 @@
 name: haproxy-spoe-vibes
 base: core22
-version: '1.0'
+version: "1.0"
 summary: Local LLM REST API using llama-server and Qwen 0.5B
 description: |
   A fully automated deployment of a lightweight, CPU-only Large Language Model.
@@ -12,13 +12,13 @@ apps:
   llama-server:
     command: bin/start-llama-server
     daemon: simple
-    plugs: 
+    plugs:
       - network
       - network-bind
   spoe-agent:
     command: bin/start-haproxy-spoe-vibes
     daemon: simple
-    plugs: 
+    plugs:
       - network
       - network-bind
 
@@ -39,7 +39,7 @@ parts:
     plugin: go
     source: .
     build-snaps:
-      - go/1.22/stable
+      - go/1.25/stable
   scripts:
     plugin: dump
     source: ./scripts
