@@ -1,5 +1,5 @@
 name: haproxy-spoe-vibes
-base: core22
+base: core24
 version: '1.0'
 summary: HAProxy SPOE agent that screens HTTP requests with an LLM
 description: |

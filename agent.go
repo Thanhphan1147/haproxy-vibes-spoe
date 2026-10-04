@@ -96,11 +96,19 @@ func chatCompletion(messages []ResponseMessage, tools []Tool) (string, error) {
 }
 
 func parseDecision(content string) (Decision, error) {
-	var decision Decision
-	if err := json.Unmarshal([]byte(content), &decision); err != nil {
-		return decision, fmt.Errorf("unmarshal decision: %w", err)
+	var envelope DecisionEnvelope
+	if err := json.Unmarshal([]byte(content), &envelope); err != nil {
+		return Decision{}, fmt.Errorf("unmarshal decision: %w", err)
 	}
-	return decision, nil
+	return envelope.Decision, nil
+}
+
+// flatten replaces line breaks with spaces. HAProxy's `http-request return
+// lf-string` applies HTTP encoding (LOG_OPT_HTTP), which percent-encodes
+// control characters such as LF (0x0a) into "%0A". Collapsing line breaks
+// keeps the value intact when expanded into the response body.
+func flatten(s string) string {
+	return strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
 }
 
 func main() {
@@ -204,7 +212,21 @@ func handler(req *request.Request) {
 		return
 	}
 
-	req.Actions.SetVar(action.ScopeSession, "allowed", decision.Allowed)
-	req.Actions.SetVar(action.ScopeSession, "backend", strings.ToLower(decision.Backend))
-	req.Actions.SetVar(action.ScopeSession, "reason", fmt.Sprintf("You request has been denied - %s", decision.Reason))
+	req.Actions.SetVar(action.ScopeSession, "action", decision.Action)
+
+	switch decision.Action {
+	case "route":
+		req.Actions.SetVar(action.ScopeSession, "allowed", true)
+		req.Actions.SetVar(action.ScopeSession, "backend", strings.ToLower(decision.Backend))
+	case "block":
+		req.Actions.SetVar(action.ScopeSession, "allowed", false)
+		req.Actions.SetVar(action.ScopeSession, "reason", fmt.Sprintf("You request has been denied - %s", flatten(decision.Reason)))
+	case "respond":
+		req.Actions.SetVar(action.ScopeSession, "allowed", false)
+		req.Actions.SetVar(action.ScopeSession, "reason", flatten(decision.Reason))
+		req.Actions.SetVar(action.ScopeSession, "custom_html_content", flatten(decision.CustomHTMLContent))
+	default:
+		log.Printf("unknown action %q in decision", decision.Action)
+		return
+	}
 }

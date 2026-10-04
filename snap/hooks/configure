@@ -1,0 +1,3 @@
+#!/bin/sh
+# Configuration is read by the spoe-agent daemon via snapctl; nothing to do here.
+exit 0

@@ -47,10 +47,6 @@ type Tool struct {
 	Function ToolFunction `json:"function"`
 }
 
-type ToolChoiceFunction struct {
-	Name string `json:"name"`
-}
-
 type Thinking struct {
 	Type string `json:"type"`
 }
@@ -65,7 +61,12 @@ type ChatRequest struct {
 }
 
 type Decision struct {
-	Allowed bool   `json:"allowed"`
-	Backend string `json:"backend"`
-	Reason  string `json:"reason"`
+	Action            string `json:"action"`
+	Backend           string `json:"backend"`
+	Reason            string `json:"reason"`
+	CustomHTMLContent string `json:"custom_html_content"`
+}
+
+type DecisionEnvelope struct {
+	Decision Decision `json:"decision"`
 }
