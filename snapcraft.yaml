@@ -12,7 +12,7 @@ apps:
   spoe-agent:
     command: bin/start-haproxy-spoe-vibes
     daemon: simple
-    plugs: 
+    plugs:
       - network
       - network-bind
 
@@ -21,7 +21,7 @@ parts:
     plugin: go
     source: .
     build-snaps:
-      - go/1.22/stable
+      - go/1.25/stable
   scripts:
     plugin: dump
     source: ./scripts
