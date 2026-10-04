@@ -1,20 +1,14 @@
 name: haproxy-spoe-vibes
 base: core22
 version: '1.0'
-summary: Local LLM REST API using llama-server and Qwen 0.5B
+summary: HAProxy SPOE agent that screens HTTP requests with an LLM
 description: |
-  A fully automated deployment of a lightweight, CPU-only Large Language Model.
-  This snap packages llama.cpp's server with Qwen2.5-0.5B to expose an 
-  OpenAI-compatible REST API.
+  An HAProxy SPOE agent that inspects incoming HTTP requests, asks an
+  OpenAI-compatible LLM API whether each request is safe, picks a backend,
+  and returns a denial reason. Authentication is done with an API key.
 confinement: strict
 
 apps:
-  llama-server:
-    command: bin/start-llama-server
-    daemon: simple
-    plugs: 
-      - network
-      - network-bind
   spoe-agent:
     command: bin/start-haproxy-spoe-vibes
     daemon: simple
@@ -23,18 +17,6 @@ apps:
       - network-bind
 
 parts:
-  llama.cpp:
-    source: https://github.com/ggml-org/llama.cpp
-    source-type: git
-    plugin: cmake
-    stage-packages:
-      - libgomp1
-  llama-model:
-    plugin: nil
-    source: models
-    override-build: |
-      mkdir -p $CRAFT_PART_INSTALL/models
-      cp qwen.gguf $CRAFT_PART_INSTALL/models/model.gguf
   spoe-agent:
     plugin: go
     source: .

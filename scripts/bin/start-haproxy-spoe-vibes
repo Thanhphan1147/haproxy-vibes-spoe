@@ -11,4 +11,8 @@ if [ -z "$PORT" ]; then
   PORT=25159
 fi
 
+export OPENAI_API_KEY=$(snapctl get api-key)
+export OPENAI_API_URL=$(snapctl get api-url)
+export OPENAI_MODEL=$(snapctl get model)
+
 exec $SNAP/bin/vibes $PORT

@@ -2,49 +2,66 @@ package main
 
 import (
 	"bytes"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strings"
+	"text/template"
+	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/negasus/haproxy-spoe-go/action"
 	"github.com/negasus/haproxy-spoe-go/agent"
 	"github.com/negasus/haproxy-spoe-go/logger"
 	"github.com/negasus/haproxy-spoe-go/request"
-
-	"net/http"
 )
 
-type ResponseMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-type ResponseMessageWrapper struct {
-	Message ResponseMessage `json:"message"`
-}
-type Response struct {
-	Choices []ResponseMessageWrapper `json:"choices"`
+//go:embed prompt.md
+var promptFS embed.FS
+
+var promptTmpl *template.Template
+
+func renderPrompt(name string, data promptData) (string, error) {
+	var buf bytes.Buffer
+	if err := promptTmpl.ExecuteTemplate(&buf, name, data); err != nil {
+		return "", fmt.Errorf("render prompt %q: %w", name, err)
+	}
+	return strings.TrimSpace(buf.String()), nil
 }
 
-type ChatRequest struct {
-	Messages []ResponseMessage `json:"messages"`
-}
+var (
+	apiURL   string
+	apiKey   string
+	apiModel string
+	client   = &http.Client{Timeout: 60 * time.Second}
+)
 
-func chatCompletion(client *http.Client, url string, messages []ResponseMessage) (string, error) {
-	payload := ChatRequest{Messages: messages}
+func chatCompletion(messages []ResponseMessage, tools []Tool) (string, error) {
+	temperature := 0.0
+	payload := ChatRequest{
+		Model:       apiModel,
+		Messages:    messages,
+		Tools:       tools,
+		ToolChoice:  "required",
+		Thinking:    &Thinking{Type: "disabled"},
+		Temperature: &temperature,
+	}
 	jsonBody, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal request payload: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(jsonBody))
+	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(jsonBody))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -70,7 +87,20 @@ func chatCompletion(client *http.Client, url string, messages []ResponseMessage)
 		return "", fmt.Errorf("response has no choices")
 	}
 
-	return strings.TrimSpace(result.Choices[0].Message.Content), nil
+	message := result.Choices[0].Message
+	if len(message.ToolCalls) > 0 {
+		return strings.TrimSpace(message.ToolCalls[0].Function.Arguments), nil
+	}
+
+	return strings.TrimSpace(message.Content), nil
+}
+
+func parseDecision(content string) (Decision, error) {
+	var decision Decision
+	if err := json.Unmarshal([]byte(content), &decision); err != nil {
+		return decision, fmt.Errorf("unmarshal decision: %w", err)
+	}
+	return decision, nil
 }
 
 func main() {
@@ -79,6 +109,33 @@ func main() {
 		os.Exit(1)
 	}
 	port := os.Args[1]
+
+	if err := godotenv.Load(); err != nil {
+		log.Printf("no .env file loaded: %v", err)
+	}
+
+	apiKey = os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		log.Printf("OPENAI_API_KEY is not set")
+		os.Exit(1)
+	}
+
+	apiURL = os.Getenv("OPENAI_API_URL")
+	if apiURL == "" {
+		apiURL = "https://api.deepseek.com/v1/chat/completions"
+	}
+
+	apiModel = os.Getenv("OPENAI_MODEL")
+	if apiModel == "" {
+		apiModel = "deepseek-flash"
+	}
+
+	tmpl, err := template.ParseFS(promptFS, "prompt.md")
+	if err != nil {
+		log.Printf("error parsing prompt.md: %v", err)
+		os.Exit(1)
+	}
+	promptTmpl = tmpl
 
 	listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%s", port))
 	if err != nil {
@@ -102,58 +159,52 @@ func handler(req *request.Request) {
 		return
 	}
 
-	systemMessage := "You are an expert network engineer and cybersecurity analyst,you can identify malicious requests simply by looking at them. You can also know where to route requests just by looking at them.\nThis is an HTTP request coming into an HAProxy loadbalancer and you've been tasked to analyze it and decide if the request is safe or not. Your response will be used by HAProxy to decide what to do with the incoming HTTP request. If the request has been determined to be safe by you, it will be forwarded to the servers behind the load balancer. There are 3 types of questions you will be asked:\n1. 'Is this HTTP request safe?' - Reply with ONLY 'Yes' or 'No', DON'T ADD ANYTHING ELSE. You tend to say 'Yes' if you don't see anything particularly wrong with the incoming HTTP request\n2. 'Which backend to route this request to? Pick one from the list' - When asked this question the user will give you a list of HAProxy backends to choose from, for example:default\nweb\napi, in this example you can reply with either 'default', 'web' or 'api' depending on your analysis of the HTTP request.\n3. Why did you block this HTTP request? - Give a short witty explaination on why this HTTP request is dangerous and should be blocked."
+	backends := make([]string, 0)
+	for _, backend := range strings.Split(backendsArg, "|") {
+		if backend = strings.TrimSpace(backend); backend != "" {
+			backends = append(backends, backend)
+		}
+	}
 
-	user_message := fmt.Sprintf("Is this HTTP request safe? Here's the information about the incoming HTTP request:\n%s %s HTTP/%s\nHost: %s\nHeaders: %s\nBody: %s\n /no_think", method, pathq, ver, hostname, hrds, body)
-	apiURL := "http://127.0.0.1:11434/chat/completions"
-	client := &http.Client{}
-	content, err := chatCompletion(client, apiURL, []ResponseMessage{
-		{Role: "system", Content: systemMessage},
-		{Role: "user", Content: user_message},
+	systemMessage, err := renderPrompt("system", promptData{})
+	if err != nil {
+		log.Printf("error rendering system prompt: %v", err)
+		return
+	}
+
+	userMessage, err := renderPrompt("user", promptData{
+		Method:   method,
+		Pathq:    pathq,
+		Ver:      ver,
+		Hostname: hostname,
+		Headers:  hrds,
+		Body:     body,
+		Backends: strings.Join(backends, "\n"),
 	})
 	if err != nil {
-		fmt.Printf("Error getting allow decision: %v\n", err)
+		log.Printf("error rendering user prompt: %v", err)
+		return
+	}
+
+	tools := buildDecisionTool(backends)
+
+	content, err := chatCompletion([]ResponseMessage{
+		{Role: "system", Content: systemMessage},
+		{Role: "user", Content: userMessage},
+	}, tools)
+	if err != nil {
+		fmt.Printf("Error getting decision: %v\n", err)
 		return
 	}
 	fmt.Printf("%s\n", content)
 
-	allowed := strings.Contains(strings.ToLower(content), "yes")
-	backends := strings.Split(backendsArg, "|")
-	var availableBackends strings.Builder
-	for i := 0; i < len(backends); i++ {
-		availableBackends.WriteString(fmt.Sprintf("%s\n", strings.TrimSpace(backends[i])))
+	decision, err := parseDecision(content)
+	if err != nil {
+		log.Printf("error parsing decision: %v", err)
+		return
 	}
 
-	reason := ""
-	if !allowed {
-		reason, err = chatCompletion(client, apiURL, []ResponseMessage{
-			{Role: "system", Content: systemMessage},
-			{Role: "user", Content: user_message},
-			{Role: "assistant", Content: content},
-			{Role: "user", Content: "Why? - Give a short witty explaination to elaborate on your previous answer. Imagine there's an attacker sending the request and you are talking to them, exposing their plans in real time. /no_think"},
-		})
-		if err != nil {
-			fmt.Printf("Error getting backend decision: %v\n", err)
-			return
-		}
-		fmt.Printf("Reason: %s\n", reason)
-	}
-
-	target := "default"
-	if allowed {
-		target, err = chatCompletion(client, apiURL, []ResponseMessage{
-			{Role: "system", Content: systemMessage},
-			{Role: "user", Content: user_message},
-			{Role: "assistant", Content: content},
-			{Role: "user", Content: fmt.Sprintf("Which backend amongst these? Pick one from the list:\n%s /no_think", availableBackends.String())},
-		})
-		if err != nil {
-			fmt.Printf("Error getting backend decision: %v\n", err)
-			return
-		}
-		fmt.Printf("%s\n", target)
-	}
-	req.Actions.SetVar(action.ScopeSession, "allowed", allowed)
-	req.Actions.SetVar(action.ScopeSession, "backend", strings.ToLower(target))
-	req.Actions.SetVar(action.ScopeSession, "reason", fmt.Sprintf("You request has been denied - %s", reason))
+	req.Actions.SetVar(action.ScopeSession, "allowed", decision.Allowed)
+	req.Actions.SetVar(action.ScopeSession, "backend", strings.ToLower(decision.Backend))
+	req.Actions.SetVar(action.ScopeSession, "reason", fmt.Sprintf("You request has been denied - %s", decision.Reason))
 }
